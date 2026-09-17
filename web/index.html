@@ -1,0 +1,79 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>mushtalk — control</title>
+<style>
+  body { font: 14px/1.5 system-ui, sans-serif; margin: 0; padding: 16px; background: #111; color: #eee; }
+  h1 { font-size: 16px; margin: 0 0 12px; }
+  .row { display: flex; gap: 8px; flex-wrap: wrap; margin: 8px 0; align-items: center; }
+  button { padding: 10px 14px; border: 0; border-radius: 8px; background: #2d6cdf; color: #fff; font-size: 14px; }
+  button:active { background: #1f4fa8; } button.alt { background: #444; }
+  .stat { display: inline-block; min-width: 84px; } .k { color: #8aa; }
+  select { padding: 8px; border-radius: 8px; background: #222; color: #eee; border: 1px solid #444; }
+  #log { margin-top: 12px; background: #000; border-radius: 8px; padding: 10px; height: 40vh; overflow: auto;
+         white-space: pre-wrap; font-family: ui-monospace, monospace; font-size: 12px; }
+  .me { color: #6cf; } .in { color: #9e9; } .sys { color: #cc8; } .esp { color: #fc6; }
+</style>
+
+<h1>mushtalk control — <span id="name">connecting…</span></h1>
+<div class="row">
+  <span class="stat"><span class="k">ws:</span> <b id="state">–</b></span>
+  <span class="stat"><span class="k">board:</span> <b id="board">–</b></span>
+</div>
+<div class="row">
+  <label class="k">sample</label><select id="file"></select>
+  <button onclick="playSample()">Play</button>
+  <button id="mutebtn" class="alt" onclick="toggleMute()">Audio off</button>
+</div>
+<p class="k">Sound comes from the ESP32 speaker, not this computer. Close the Arduino Serial Monitor so the conductor can open the USB port.</p>
+<div id="log"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const log = (m, c='') => { const d=document.createElement('div'); if(c)d.className=c;
+  d.textContent=new Date().toLocaleTimeString()+'  '+m; $('log').appendChild(d); $('log').scrollTop=$('log').scrollHeight; };
+const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
+let ws, myName='?', muted=false;
+
+function setBoard(info){
+  if(!info){ $('board').textContent='–'; return; }
+  $('board').textContent = info.connected ? (info.path || 'connected') : (info.error || 'not connected');
+}
+
+function toggleMute(){
+  muted = !muted;
+  $('mutebtn').textContent = muted ? 'Audio on' : 'Audio off';
+  ws.send(JSON.stringify({type:'sound', on: !muted}));
+  log(muted ? '▸ audio off' : '▸ audio on','me');
+}
+
+function playSample(){
+  const file=$('file').value;
+  if(!file){ log('no sample in the list','sys'); return; }
+  ws.send(JSON.stringify({type:'play', file}));
+  log(`▸ play ${file}`,'me');
+}
+
+async function refreshList(){
+  const files=await(await fetch('/samples')).json();
+  $('file').innerHTML=files.map(f=>`<option>${f}</option>`).join('');
+  log('samples: '+(files.join(', ')||'(none)'),'sys');
+}
+
+function connect(){
+  ws=new WebSocket(wsUrl); $('state').textContent='opening';
+  ws.onopen=()=>{ $('state').textContent='open'; log('connected to conductor','sys'); refreshList(); };
+  ws.onclose=()=>{ $('state').textContent='closed — retrying'; setTimeout(connect,1500); };
+  ws.onerror=()=>log('socket error','sys');
+  ws.onmessage=ev=>{
+    const m=JSON.parse(ev.data);
+    if(m.type==='welcome'){ myName=m.name; $('name').textContent=m.name; setBoard(m.serial); return; }
+    if(m.type==='serial'){ setBoard(m); log(m.connected ? `board on ${m.path}` : `board: ${m.error||'disconnected'}`,'sys'); return; }
+    if(m.type==='peer'){ log(`peer ${m.event}: ${m.name}`,'sys'); return; }
+    if(m.type==='play'){ log(`◂ ${m.from} play ${m.file||('slot '+m.slot)}`,'in'); return; }
+    if(m.type==='sound'){ log(`◂ ${m.from} sound ${m.on?'ON':'OFF'}`,'in'); return; }
+    if(m.type==='esp'){ log(m.line,'esp'); return; }
+  };
+}
+connect();
+</script>

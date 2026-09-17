@@ -1,0 +1,7 @@
+{
+  "name": "mushtalk-conductor",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "serialport": "^12.0.0", "ws": "^8.18.0" }
+}
