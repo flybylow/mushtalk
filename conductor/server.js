@@ -34,6 +34,19 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname === '/usb/release') {
+    releaseUsb();
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('USB released — upload in Arduino, then Reconnect');
+    return;
+  }
+  if (url.pathname === '/usb/claim') {
+    claimUsb();
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('USB reclaiming');
+    return;
+  }
+
   fs.readFile(WEB_PAGE, (err, data) => {
     if (err) { res.writeHead(404); res.end('web/index.html not found'); return; }
     res.writeHead(200, { 'Content-Type': 'text/html' });
@@ -44,9 +57,11 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocketServer({ server });
 let nextId = 1;
 
-const serialState = { connected: false, path: null, error: 'looking for ESP32…' };
+const FLASH_MSG = 'USB released — flash in Arduino, then Reconnect';
+const serialState = { connected: false, path: null, error: 'looking for ESP32…', held: false };
 let serialPort = null;
 let serialOpening = false;
+let flashMode = false;
 
 function broadcast(fromWs, obj) {
   const msg = JSON.stringify(obj);
@@ -63,11 +78,38 @@ function serialInfo() {
 }
 
 function setSerialState(next) {
+  next = { ...next, held: flashMode };
   const same = serialState.connected === next.connected
     && serialState.path === (next.path ?? serialState.path)
-    && serialState.error === (next.error ?? serialState.error);
+    && serialState.error === (next.error ?? serialState.error)
+    && serialState.held === next.held;
   Object.assign(serialState, next);
   if (!same) broadcastAll(serialInfo());
+}
+
+function releaseUsb() {
+  flashMode = true;
+  if (serialPort && (serialPort.isOpen || serialOpening)) {
+    console.log('[esp] releasing USB for Arduino flash');
+    try { serialPort.close(); } catch { serialPort = null; }
+  } else {
+    serialPort = null;
+    serialOpening = false;
+    setSerialState({ connected: false, path: null, error: FLASH_MSG });
+    console.log('[esp] USB already free (flash mode)');
+  }
+}
+
+function claimUsb() {
+  if (!flashMode && serialPort?.isOpen) return;
+  flashMode = false;
+  setSerialState({ connected: false, path: null, error: 'looking for ESP32…' });
+  console.log('[esp] reclaiming USB');
+  findEspPath().then((espPath) => {
+    if (flashMode) return;
+    if (espPath) openSerial(espPath);
+    else setSerialState({ connected: false, path: null, error: 'plug in the ESP32' });
+  }).catch((err) => setSerialState({ connected: false, error: err.message }));
 }
 
 function sendEsp(line) {
@@ -115,7 +157,7 @@ async function findEspPath() {
 }
 
 function openSerial(espPath) {
-  if (serialPort?.isOpen || serialOpening) return;
+  if (flashMode || serialPort?.isOpen || serialOpening) return;
   serialOpening = true;
   console.log(`[esp] opening ${espPath}`);
   const port = new SerialPort({ path: espPath, baudRate: 115200 });
@@ -138,14 +180,19 @@ function openSerial(espPath) {
   port.on('close', () => {
     serialOpening = false;
     if (serialPort === port) serialPort = null;
-    setSerialState({ connected: false, path: null, error: 'disconnected' });
-    console.log('[esp] disconnected');
+    if (flashMode) {
+      setSerialState({ connected: false, path: null, error: FLASH_MSG });
+      console.log('[esp] USB released for flash');
+    } else {
+      setSerialState({ connected: false, path: null, error: 'disconnected' });
+      console.log('[esp] disconnected');
+    }
   });
   port.on('error', (err) => {
     serialOpening = false;
     const busy = /busy|in use|access denied|cannot open/i.test(err.message);
-    const error = busy
-      ? 'USB port busy — close Arduino Serial Monitor'
+    const error = flashMode ? FLASH_MSG
+      : busy ? 'USB port busy — Release USB, or close Arduino Serial Monitor'
       : err.message;
     if (serialPort === port) serialPort = null;
     setSerialState({ connected: false, path: espPath, error });
@@ -155,15 +202,15 @@ function openSerial(espPath) {
 
 async function pollSerial() {
   try {
-    if (!serialPort?.isOpen && !serialOpening) {
+    if (!flashMode && !serialPort?.isOpen && !serialOpening) {
       const espPath = await findEspPath();
       if (espPath) openSerial(espPath);
       else setSerialState({ connected: false, path: null, error: 'plug in the ESP32' });
     }
   } catch (err) {
-    setSerialState({ connected: false, error: err.message });
+    if (!flashMode) setSerialState({ connected: false, error: err.message });
   }
-  setTimeout(pollSerial, serialPort?.isOpen ? 4000 : 3000);
+  setTimeout(pollSerial, serialPort?.isOpen ? 4000 : 2000);
 }
 
 wss.on('connection', (ws) => {
@@ -176,6 +223,11 @@ wss.on('connection', (ws) => {
     let m; try { m = JSON.parse(raw.toString()); } catch { return; }
     if (m.type === 'ping') { ws.send(JSON.stringify({ type: 'pong', t0: m.t0, tServer: Date.now() })); return; }
     m.from = name;
+    if (m.type === 'usb') {
+      if (m.action === 'release') releaseUsb();
+      else if (m.action === 'claim') claimUsb();
+      return;
+    }
     if (m.type === 'play') playToEsp(m);
     if (m.type === 'sound') soundToEsp(!!m.on);
     broadcast(ws, m);

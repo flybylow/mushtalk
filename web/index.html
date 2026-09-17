@@ -19,13 +19,14 @@
 <div class="row">
   <span class="stat"><span class="k">ws:</span> <b id="state">–</b></span>
   <span class="stat"><span class="k">board:</span> <b id="board">–</b></span>
+  <button id="usbbtn" class="alt" onclick="toggleUsb()">Release USB to flash</button>
 </div>
 <div class="row">
   <label class="k">sample</label><select id="file"></select>
   <button onclick="playSample()">Play</button>
   <button id="mutebtn" class="alt" onclick="toggleMute()">Audio off</button>
 </div>
-<p class="k">Sound comes from the ESP32 speaker, not this computer. Close the Arduino Serial Monitor so the conductor can open the USB port.</p>
+<p class="k">Sound comes from the ESP32 speaker. Before an Arduino upload, click <b>Release USB to flash</b> — the site stays on port 8080. After the sketch lands, click <b>Reconnect</b>.</p>
 <div id="log"></div>
 
 <script>
@@ -33,11 +34,20 @@ const $ = id => document.getElementById(id);
 const log = (m, c='') => { const d=document.createElement('div'); if(c)d.className=c;
   d.textContent=new Date().toLocaleTimeString()+'  '+m; $('log').appendChild(d); $('log').scrollTop=$('log').scrollHeight; };
 const wsUrl = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host;
-let ws, myName='?', muted=false;
+let ws, myName='?', muted=false, usbHeld=false;
 
 function setBoard(info){
   if(!info){ $('board').textContent='–'; return; }
+  usbHeld = !!info.held;
   $('board').textContent = info.connected ? (info.path || 'connected') : (info.error || 'not connected');
+  const b=$('usbbtn');
+  b.textContent = usbHeld ? 'Reconnect' : 'Release USB to flash';
+  b.classList.toggle('alt', !usbHeld);
+}
+
+function toggleUsb(){
+  ws.send(JSON.stringify({type:'usb', action: usbHeld ? 'claim' : 'release'}));
+  log(usbHeld ? '▸ reclaim USB' : '▸ release USB for Arduino flash','me');
 }
 
 function toggleMute(){

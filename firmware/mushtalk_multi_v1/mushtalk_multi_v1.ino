@@ -78,9 +78,10 @@ void listSamples() {
                 soundEnabled ? "ON" : "OFF", autoCycle ? "on" : "off");
 }
 
-// PCM payload starts at the 'data' chunk, not always byte 44.
-int wavPcmOffset(const uint8_t *buf, size_t len) {
-  if (len < 44) return -1;
+// PCM payload starts at the 'data' chunk (not always byte 44) and has a size.
+// Extra RIFF chunks after that (e.g. C2PA) must not be sent to the amp.
+bool wavPcmRange(const uint8_t *buf, size_t len, size_t *off, size_t *nbytes) {
+  if (len < 44) return false;
   size_t i = 12;
   while (i + 8 <= len) {
     uint32_t id = (uint32_t)buf[i] | ((uint32_t)buf[i+1]<<8)
@@ -88,10 +89,15 @@ int wavPcmOffset(const uint8_t *buf, size_t len) {
     uint32_t sz = (uint32_t)buf[i+4] | ((uint32_t)buf[i+5]<<8)
                 | ((uint32_t)buf[i+6]<<16) | ((uint32_t)buf[i+7]<<24);
     i += 8;
-    if (id == 0x61746164) return (int)i;     // 'data'
+    if (id == 0x61746164) {                      // 'data'
+      if (i + sz > len) sz = len - i;
+      *off = i;
+      *nbytes = sz;
+      return true;
+    }
     i += sz;
   }
-  return 44;
+  return false;
 }
 
 void play(int i) {
@@ -110,20 +116,27 @@ void play(int i) {
   size_t got = f.read(buf, len);
   f.close();
 
-  int off = wavPcmOffset(buf, got);
-  if (off < 0) { Serial.println("not a wav"); free(buf); inPlay = false; return; }
+  size_t off = 0, nbytes = 0;
+  if (!wavPcmRange(buf, got, &off, &nbytes)) {
+    Serial.println("not a wav"); free(buf); inPlay = false; return;
+  }
 
-  Serial.printf("[%d] playing %s (%u bytes)\n", i, SAMPLES[i], (unsigned) got);
+  Serial.printf("[%d] playing %s (%u pcm bytes)\n", i, SAMPLES[i], (unsigned) nbytes);
 
-  // Write PCM in chunks so the mute button (and Serial) can stop output immediately.
-  while (off < (int)got && soundEnabled) {
+  size_t end = off + nbytes;
+  while (off < end && soundEnabled) {
     handleButton();
     handleSerial();
     if (!soundEnabled) break;
     size_t n = CHUNK;
-    if (off + n > got) n = got - off;
+    if (off + n > end) n = end - off;
     I2S.write(buf + off, n);
     off += n;
+  }
+  // Keep BCLK alive with a short zero tail so the MAX98357A does not pop on underrun.
+  if (soundEnabled) {
+    uint8_t z[CHUNK] = {0};
+    for (int k = 0; k < 4; k++) I2S.write(z, sizeof z);
   }
   free(buf);
   inPlay = false;

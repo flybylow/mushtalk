@@ -14,16 +14,15 @@ Networked ceramic-audio installation. Sound comes from ESP32-S3 nodes
 
 ## Run (browser controls the board)
 
-Plug the ESP32 in over USB. Close the Arduino Serial Monitor (only one
-program can own the serial port). Then:
+Plug the ESP32 in over USB, then:
 
     cd conductor
-    npm install
     npm start                                  # http://localhost:8080
 
-Open the URL, pick a sample, Play. The speaker on the microcontroller should
-fire; the Mac stays silent. Audio off / Audio on mutes the board (`off`/`on`
-over Serial). Override the port with `SERIAL_PATH=/dev/cu.usbmodemXXXX npm start`.
+Open the URL, pick a sample, Play. Sound comes from the ESP32 speaker.
+Before an Arduino upload, click **Release USB to flash** (the site stays on
+8080). After the sketch lands, **Reconnect**. Override the serial device with
+`SERIAL_PATH=/dev/cu.usbmodemXXXX npm start`.
 
 ## Firmware
 
